@@ -31,12 +31,13 @@ def test_create_task_with_mock_repo():
     assert result.title == "Купить молоко"
 
 def test_create_task_validation_empty_title():
-    """Проверка, что пустой title выбрасывает ValueError в сервисном слое."""
+    """Проверка, что пустой title (пробелы) выбрасывает ValueError в сервисном слое."""
     mock_repo = Mock()
     mock_repo.count.return_value = 0
     service = TaskService(repo=mock_repo)
 
-    data = CreateTaskRequest(title="  ", priority=1)
+    # 3 пробела проходят валидацию длины Pydantic (min_length=3), но отсекаются сервисом после strip()
+    data = CreateTaskRequest(title="   ", priority=1)
     with pytest.raises(ValueError, match="не менее 3 символов"):
         service.create_task(data)
 
