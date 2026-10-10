@@ -1,0 +1,42 @@
+ЗАМЕТКИ И АРХИТЕКТУРА ПРОЕКТА (TASK TRACKER)
+==============================================
+
+1. Что было сделано:
+- Добавлена интеграция реляционной базы данных (SQLAlchemy) через SQLite (tasks.db) с поддержкой перехода на PostgreSQL через .env (DATABASE_URL).
+- Сконфигурирован движок create_engine, сессионный фабрикатор SessionLocal, базовый декларативный класс Base.
+- Реализован генератор get_db() с контекстом yield / finally db.close() для безопасного per-request управления жизненным циклом сессии (согласно лекции 7 по DI).
+- Реализована ORM-модель Task в task_app/models/tasks.py со всеми атрибутами:
+  * id (int, primary key, autoincrement)
+  * title (str, nullable=False, indexed)
+  * description (str, nullable=True)
+  * priority (int, default=1, 1..5)
+  * done (bool, default=False)
+  * created_at (datetime)
+  * updated_at (datetime, onupdate)
+- Реализованы Pydantic DTO схемы (валидация данных на входе и отсечение лишнего на выходе):
+  * CreateTaskRequest (валидация title: 3..100 симв., priority: 1..5, description)
+  * UpdateTaskRequest (опциональные поля для обновления)
+  * TaskResponse (полная модель ответа с id, датами создания и обновления, from_attributes=True)
+- Реализован репозиторий TaskRepository (task_app/repositories/tasks.py):
+  * get_all(skip, limit) - пагинация и выборка всех задач
+  * get_by_id(task_id) - выборка одной задачи по id
+  * create(task_data) - добавление в сессию, commit, refresh
+  * update(task_id, task_data) - обновление полей через model_dump(exclude_unset=True)
+  * delete(task_id) - удаление записи
+  * count() - подсчет общего числа задач
+- Реализован сервисный слой TaskService (task_app/services/tasks.py):
+  * Чистый Python без привязки к FastAPI
+  * Валидация входных данных, бизнес-правила (лимит 100 задач)
+  * Выброс ValueError при ошибках (не HTTPException!)
+  * Интеграция с NotificationService через композицию
+- Настроен Dependency Injection (task_app/dependencies.py):
+  * get_task_repository(db = Depends(get_db))
+  * get_task_service(repo = Depends(get_task_repository), notifier = Depends(...))
+- Реализован роутер (task_app/api/v1/tasks.py):
+  * Тонкий роут-адаптер: принимает JSON, вызывает TaskService, транслирует ValueError в HTTP 422 или 404
+  * POST /v1/tasks (201 Created)
+  * GET /v1/tasks (200 OK, коллекция с skip/limit)
+  * GET /v1/tasks/{id} (200 OK, один объект, 404 при отсутствии)
+  * PUT /v1/tasks/{id} и PATCH /v1/tasks/{id} (200 OK, обновление)
+  * DELETE /v1/tasks/{id} (204 No Content / 200 OK)
+- Написаны unit-тесты (tests/test_tasks.py) с unittest.mock.Mock() для тестирования логики без реальной БД.
