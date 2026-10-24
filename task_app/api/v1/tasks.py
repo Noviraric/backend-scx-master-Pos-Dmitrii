@@ -6,11 +6,13 @@ from task_app.schemas.tasks import (
     TaskResponse,
 )
 from task_app.services.tasks import TaskService
-from task_app.dependencies import get_task_service
+from task_app.dependencies import get_task_service, get_current_user, require_admin
 
+# Все эндпоинты задач — только для аутентифицированных пользователей
 router = APIRouter(
     prefix="/tasks",
     tags=["tasks"],
+    dependencies=[Depends(get_current_user)],
 )
 
 @router.post(
@@ -114,7 +116,8 @@ def patch_task(
     "/{task_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить задачу по ID",
-    description="Удаляет задачу из базы данных по ее идентификатору."
+    description="Удаляет задачу из базы данных по ее идентификатору. Доступно только роли admin.",
+    dependencies=[Depends(require_admin)],
 )
 def delete_task(
     task_id: int = Path(..., ge=1, description="ID задачи"),

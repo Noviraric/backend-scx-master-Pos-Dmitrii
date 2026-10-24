@@ -31,6 +31,22 @@ core/database.py + models/tasks.py (SQLite / PostgreSQL база данных)
 | `PATCH`| `/v1/tasks/{task_id}` | **Update**: Частичное обновление задачи | `200 OK` / `404 Not Found` |
 | `DELETE`| `/v1/tasks/{task_id}` | **Delete**: Удаление задачи из БД по `id` | `204 No Content` / `404 Not Found` |
 
+## 🔐 Аутентификация и авторизация (JWT)
+
+| Метод | URL | Доступ | Описание |
+|---|---|---|---|
+| `POST` | `/v1/auth/register` | все | Регистрация (JSON: `username`, `email`, `password`). В БД — bcrypt-хеш |
+| `POST` | `/v1/auth/login` | все | Вход (form-data: `username`, `password`) → `access_token` (JWT, 30 мин) |
+| `GET` | `/v1/auth/me` | с токеном | Текущий пользователь |
+| `*` | `/v1/tasks...` | с токеном | Все операции с задачами, кроме удаления |
+| `DELETE` | `/v1/tasks/{task_id}` | admin | Удаление задачи |
+| `GET` | `/v1/users` | admin | Список пользователей |
+
+- Запросы с токеном: заголовок `Authorization: Bearer <token>`. В Swagger — кнопка **Authorize**.
+- Без токена — `401 Unauthorized`, без нужной роли — `403 Forbidden`.
+- Выдать роль admin: `python -m task_app.make_admin <username>`.
+- Секрет подписи задаётся в `.env`: `SECRET_KEY=...` (а также `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`).
+
 ## 📦 Быстрый запуск на локальной машине
 
 1. Установка виртуального окружения и зависимостей:

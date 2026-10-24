@@ -5,6 +5,8 @@ from task_app.core.config import get_settings
 from task_app.core.database import Base, engine
 from task_app.api.v1.tasks import router as tasks_v1_router
 from task_app.api.v1.users import router as users_v1_router
+from task_app.api.v1.auth import router as auth_v1_router
+from task_app import models  # noqa: F401 — регистрируем все модели до create_all
 
 settings = get_settings()
 
@@ -36,6 +38,10 @@ app.add_middleware(
 
 # Подключение роутеров API v1
 app.include_router(
+    auth_v1_router,
+    prefix="/v1",
+)
+app.include_router(
     tasks_v1_router,
     prefix="/v1",
 )
@@ -53,6 +59,9 @@ def root():
         "version": settings.app_version,
         "docs": "/docs",
         "endpoints": {
+            "register": "POST /v1/auth/register",
+            "login": "POST /v1/auth/login",
+            "me": "GET /v1/auth/me",
             "create_task": "POST /v1/tasks",
             "get_all_tasks": "GET /v1/tasks",
             "get_task_by_id": "GET /v1/tasks/{id}",
