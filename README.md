@@ -62,6 +62,18 @@ core/database.py + models/tasks.py (SQLite / PostgreSQL база данных)
    uvicorn task_app.main:app --reload
    ```
 
+   Или `python server.py` — если в папке `certs/` есть сертификаты, сервер запустится по HTTPS.
+
+   **Локальный HTTPS (один раз):**
+   ```bash
+   winget install FiloSottile.mkcert
+   mkcert -install                     # доверенный локальный CA в системе
+   mkdir certs
+   mkcert -cert-file certs/localhost.pem -key-file certs/localhost-key.pem localhost 127.0.0.1 ::1
+   python server.py                    # → https://localhost:8000/docs
+   ```
+   Папка `certs/` в `.gitignore` — закрытый ключ в репозиторий не попадает.
+
 3. Открыть документацию Swagger UI:
    - [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
    - [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
