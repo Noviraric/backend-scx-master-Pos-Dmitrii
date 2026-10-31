@@ -7,18 +7,68 @@
 ```
 Клиент (HTTP / Swagger / Frontend)
        │
-       ▼  JSON / HTTP-статусы
-api/v1/tasks.py (Тонкий роут-адаптер: принимает DTO, вызывает сервис, ловит ValueError -> 422/404)
+       ▼  JSON / HTTP-статусы; ошибки — всегда {"error": {...}}
+api/v1/tasks.py (Тонкий async-роут: принимает DTO, await сервис. Ничего не ловит)
        │
-       ▼  DTO / Чистый Python (без зависимостей от FastAPI)
-services/tasks.py (Толстый сервис: бизнес-правила, валидация, лимиты, вызов Notifier)
+       ▼  DTO
+services/tasks.py (Async-сервис: бизнес-правила, лимиты, аватарки. Бросает AppException-ы)
+       │                         │
+       ▼  await repo.*()         ▼  asyncio.to_thread(storage.*) — boto3 синхронный
+repositories/tasks.py       adapters/ (FileStorage → S3Storage → boto3)
        │
-       ▼  Методы репозитория (get_all, get_by_id, create, update, delete)
-repositories/tasks.py (Репозиторий: запросы SQLAlchemy к БД, add, commit, refresh)
-       │
-       ▼  Сессия SQLAlchemy (SessionLocal / per-request через Depends(get_db))
-core/database.py + models/tasks.py (SQLite / PostgreSQL база данных)
+       ▼  AsyncSession (per-request через Depends(get_db))
+core/database.py + models/ (PostgreSQL через asyncpg / SQLite через aiosqlite)
+
+core/handlers.py — единственное место, где исключения превращаются в JSON-ответ
 ```
+
+## ⚡ Асинхронность
+
+- Весь стек `async def`: роуты → сервисы → репозитории → `AsyncSession` (SQLAlchemy 2.x).
+- Драйверы: `postgresql+asyncpg://...` и `sqlite+aiosqlite:///...`. Старые URL (`postgresql+psycopg2://`, `sqlite:///`)
+  автоматически переводятся на async-драйвер в `core/config.py`.
+- Блокирующая работа уходит из цикла событий в поток через `asyncio.to_thread`: bcrypt (медленный намеренно) и boto3 (синхронный).
+- Таблицы создаются при старте: `await conn.run_sync(Base.metadata.create_all)`; при остановке — `engine.dispose()`.
+
+## ❗ Обработка ошибок
+
+Любая ошибка API имеет один формат:
+
+```json
+{"error": {"code": "TASK_NOT_FOUND", "message": "Задача с идентификатором 999 не найдена", "field": null, "details": {"task_id": 999}}}
+```
+
+- `code` — для программы (switch, перевод), `message` — для человека, `field` — какое поле подсветить, `details` — контекст.
+- Коды — `ErrorCode` в `core/exceptions.py`, исключения — наследники `AppException` (`TaskNotFoundException`, `UserAlreadyExistsException`, ...).
+- Обработчики в `core/handlers.py` закрывают все входы:
+
+| Исключение | Статус | Код |
+|---|---|---|
+| `AppException` и наследники | из класса | `TASK_NOT_FOUND`, `USER_ALREADY_EXISTS`, `INVALID_FILE`, ... |
+| `RequestValidationError` (Pydantic) | 422 | `VALIDATION_ERROR` + `details.errors` |
+| Неизвестный URL / метод / нет токена | 404 / 405 / 401 | `NOT_FOUND` / `METHOD_NOT_ALLOWED` / `UNAUTHORIZED` |
+| `IntegrityError` (БД) | 409 | `CONFLICT` |
+| `FileStorageError` (S3) | 502 | `FILE_STORAGE_ERROR` |
+| Всё прочее | 500 | `INTERNAL_SERVER_ERROR` (стек — только в лог) |
+
+## 🖼 Аватарки задач в S3
+
+| Метод | URL | Ответ |
+|---|---|---|
+| `POST` | `/v1/tasks/{task_id}/avatar` | 200 `{task_id, key, url}`; 400 не изображение / пустой; 413 > 5 МБ; 404 нет задачи; 502 хранилище недоступно |
+| `GET` | `/v1/tasks/{task_id}/avatar` | 200 новая подписанная ссылка (1 час); 404 `AVATAR_NOT_SET` |
+| `DELETE` | `/v1/tasks/{task_id}/avatar` | 204; 404 `AVATAR_NOT_SET` |
+
+- Тип файла — по сигнатуре (PNG, JPEG, GIF), а не по `Content-Type`. Читается не больше 5 МБ + 1 байт.
+- Ключ строит сервер: `tasks/{id}/avatar.{ext}`. В БД (`tasks.avatar_key`) хранится ключ, ссылка генерируется при каждом запросе.
+- Бакет приватный, доступ только по подписанным URL. Сервис знает лишь интерфейс `FileStorage` — в тестах подставляется хранилище-словарь.
+
+**Локальное хранилище (Docker):**
+```bash
+docker run -d --name minio -p 9000:9000 -p 9001:9001 -v minio_data:/data -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin pgsty/silo:RELEASE.2026-09-16T00-00-00Z server /data --console-address ":9001"
+python -m scripts.check_s3        # проверит подключение и создаст бакет task-avatars
+```
+Консоль хранилища: http://localhost:9001. Переменные `S3_*` — в `.env` (образец — `.env.example`).
 
 ## 🛠 Реализованный CRUD для сущности Task
 
@@ -43,7 +93,7 @@ core/database.py + models/tasks.py (SQLite / PostgreSQL база данных)
 | `GET` | `/v1/users` | admin | Список пользователей |
 
 - Запросы с токеном: заголовок `Authorization: Bearer <token>`. В Swagger — кнопка **Authorize**.
-- Без токена — `401 Unauthorized`, без нужной роли — `403 Forbidden`.
+- Без токена — `401 UNAUTHORIZED`, невалидный токен — `401 INVALID_TOKEN`, без нужной роли — `403 PERMISSION_DENIED`, имя или email заняты — `409`.
 - Выдать роль admin: `python -m task_app.make_admin <username>`.
 - Секрет подписи задаётся в `.env`: `SECRET_KEY=...` (а также `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`).
 
@@ -55,6 +105,7 @@ core/database.py + models/tasks.py (SQLite / PostgreSQL база данных)
    source .venv/bin/activate  # Для Linux/macOS
    # или .venv\Scripts\activate для Windows
    pip install -r requirements.txt
+   copy .env.example .env             # и заполнить значения
    ```
 
 2. Запуск сервера с автоперезагрузкой:
@@ -78,7 +129,7 @@ core/database.py + models/tasks.py (SQLite / PostgreSQL база данных)
    - [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
    - [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
 
-4. Запуск тестов:
+4. Запуск тестов (БД — SQLite в памяти, S3 — словарь; ни PostgreSQL, ни Docker не нужны):
    ```bash
-   pytest tests/ -v
+   pytest -v
    ```

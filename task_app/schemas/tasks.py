@@ -68,5 +68,12 @@ class TaskResponse(TaskBase):
     id: int = Field(description="Уникальный идентификатор задачи", examples=[1])
     created_at: datetime = Field(description="Дата и время создания")
     updated_at: datetime = Field(description="Дата и время последнего обновления")
+    avatar_key: Optional[str] = Field(default=None, description="Ключ аватарки в S3 (ссылка — через GET /tasks/{id}/avatar)")
 
     model_config = ConfigDict(from_attributes=True)
+
+class AvatarResponse(BaseModel):
+    """Ответ на загрузку / запрос аватарки: ключ постоянный, url — временный подписанный."""
+    task_id: int
+    key: str = Field(examples=["tasks/1/avatar.png"])
+    url: str = Field(description="Подписанная ссылка на скачивание, действует 1 час")

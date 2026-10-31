@@ -12,9 +12,9 @@ router = APIRouter(
     dependencies=[Depends(require_admin)],
 )
 
-def get_user_service(repo: UserRepository = Depends(get_user_repository)) -> UserService:
+async def get_user_service(repo: UserRepository = Depends(get_user_repository)) -> UserService:
     return UserService(repo)
 
 @router.get("", response_model=List[UserResponse])
-def get_all_users(service: UserService = Depends(get_user_service)):
-    return service.get_all_users()
+async def get_all_users(service: UserService = Depends(get_user_service)):
+    return await service.get_all_users()

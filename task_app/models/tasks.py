@@ -10,6 +10,7 @@ class Task(Base):
     description = Column(String(500), nullable=True)
     priority = Column(Integer, default=1, nullable=False)
     done = Column(Boolean, default=False, nullable=False)
+    avatar_key = Column(String(1024), nullable=True)  # ключ объекта в S3, не URL; 1024 — максимум длины ключа
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

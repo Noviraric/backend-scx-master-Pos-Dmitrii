@@ -1,14 +1,16 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
+from fastapi import APIRouter, Depends, File, Path, Query, UploadFile, status
 from task_app.schemas.tasks import (
+    AvatarResponse,
     CreateTaskRequest,
     UpdateTaskRequest,
     TaskResponse,
 )
-from task_app.services.tasks import TaskService
+from task_app.services.tasks import TaskService, MAX_AVATAR_SIZE
 from task_app.dependencies import get_task_service, get_current_user, require_admin
 
-# Все эндпоинты задач — только для аутентифицированных пользователей
+# Все эндпоинты задач — только для аутентифицированных пользователей.
+# Роуты ничего не ловят: исключения сервиса превращает в ответ глобальный обработчик.
 router = APIRouter(
     prefix="/tasks",
     tags=["tasks"],
@@ -22,18 +24,12 @@ router = APIRouter(
     summary="Создать новую задачу",
     description="Валидирует данные через Pydantic DTO (CreateTaskRequest) и создает запись в БД."
 )
-def create_task(
+async def create_task(
     data: CreateTaskRequest,
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Создание задачи (Create)."""
-    try:
-        return service.create_task(data)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc)
-        )
+    return await service.create_task(data)
 
 @router.get(
     "",
@@ -42,19 +38,13 @@ def create_task(
     summary="Получить список всех задач (Коллекция)",
     description="Возвращает коллекцию всех задач из базы данных с поддержкой пагинации."
 )
-def get_all_tasks(
+async def get_all_tasks(
     skip: int = Query(default=0, ge=0, description="Количество пропускаемых записей"),
     limit: int = Query(default=100, ge=1, le=500, description="Максимальное количество записей"),
     service: TaskService = Depends(get_task_service),
 ) -> List[TaskResponse]:
     """Чтение коллекции (Read all)."""
-    try:
-        return service.get_all_tasks(skip=skip, limit=limit)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc)
-        )
+    return await service.get_all_tasks(skip=skip, limit=limit)
 
 @router.get(
     "/{task_id}",
@@ -63,18 +53,12 @@ def get_all_tasks(
     summary="Получить задачу по ID (Один объект)",
     description="Возвращает одну конкретную задачу по ее первичному ключу ID из БД."
 )
-def get_task_by_id(
+async def get_task_by_id(
     task_id: int = Path(..., ge=1, description="ID задачи"),
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Чтение одного объекта (Read single)."""
-    try:
-        return service.get_task_by_id(task_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc)
-        )
+    return await service.get_task_by_id(task_id)
 
 @router.put(
     "/{task_id}",
@@ -83,19 +67,13 @@ def get_task_by_id(
     summary="Обновить задачу по ID",
     description="Обновляет переданные поля задачи (title, description, priority, done) в БД."
 )
-def update_task(
+async def update_task(
     task_id: int = Path(..., ge=1, description="ID задачи"),
     data: UpdateTaskRequest = ...,
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Обновление задачи (Update)."""
-    try:
-        return service.update_task(task_id, data)
-    except ValueError as exc:
-        err_msg = str(exc)
-        if "не найдена" in err_msg.lower():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=err_msg)
+    return await service.update_task(task_id, data)
 
 @router.patch(
     "/{task_id}",
@@ -104,31 +82,70 @@ def update_task(
     summary="Частично обновить задачу по ID",
     description="Аналог PUT для частичного обновления полей задачи."
 )
-def patch_task(
+async def patch_task(
     task_id: int = Path(..., ge=1, description="ID задачи"),
     data: UpdateTaskRequest = ...,
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Частичное обновление задачи (Partial Update)."""
-    return update_task(task_id, data, service)
+    return await service.update_task(task_id, data)
 
 @router.delete(
     "/{task_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить задачу по ID",
-    description="Удаляет задачу из базы данных по ее идентификатору. Доступно только роли admin.",
+    description="Удаляет задачу и её аватарку. Доступно только роли admin.",
     dependencies=[Depends(require_admin)],
 )
-def delete_task(
+async def delete_task(
     task_id: int = Path(..., ge=1, description="ID задачи"),
     service: TaskService = Depends(get_task_service),
 ):
     """Удаление задачи (Delete)."""
-    try:
-        service.delete_task(task_id)
-        return None
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc)
-        )
+    await service.delete_task(task_id)
+
+# --- Аватарка задачи в S3 ---
+
+@router.post(
+    "/{task_id}/avatar",
+    response_model=AvatarResponse,
+    summary="Загрузить аватарку задачи",
+    description="PNG, JPEG или GIF до 5 МБ. Тип определяется по содержимому файла. "
+                "Ошибки: 400 — не изображение или пустой файл, 413 — больше 5 МБ, 404 — нет задачи, 502 — хранилище недоступно."
+)
+async def upload_task_avatar(
+    task_id: int = Path(..., ge=1, description="ID задачи"),
+    file: UploadFile = File(..., description="Изображение PNG, JPEG или GIF"),
+    service: TaskService = Depends(get_task_service),
+) -> AvatarResponse:
+    # Читаем не больше лимита + 1 байт: гигабайтный файл не попадёт в память целиком
+    data = await file.read(MAX_AVATAR_SIZE + 1)
+    key = await service.upload_task_avatar(task_id, data, file.filename or "avatar")
+    url = await service.get_task_avatar_url(task_id)
+    return AvatarResponse(task_id=task_id, key=key, url=url)
+
+@router.get(
+    "/{task_id}/avatar",
+    response_model=AvatarResponse,
+    summary="Ссылка на аватарку задачи",
+    description="При каждом вызове выдаёт новую подписанную ссылку (действует 1 час). 404 — аватарки нет."
+)
+async def get_task_avatar(
+    task_id: int = Path(..., ge=1, description="ID задачи"),
+    service: TaskService = Depends(get_task_service),
+) -> AvatarResponse:
+    task = await service.get_task_by_id(task_id)
+    url = await service.get_task_avatar_url(task_id)
+    return AvatarResponse(task_id=task_id, key=task.avatar_key, url=url)
+
+@router.delete(
+    "/{task_id}/avatar",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить аватарку задачи",
+    description="Удаляет объект из хранилища и очищает avatar_key. 404 — аватарки нет."
+)
+async def delete_task_avatar(
+    task_id: int = Path(..., ge=1, description="ID задачи"),
+    service: TaskService = Depends(get_task_service),
+):
+    await service.delete_task_avatar(task_id)

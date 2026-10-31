@@ -1,4 +1,5 @@
 from task_app.schemas.tasks import (
+    AvatarResponse,
     CreateTaskRequest,
     UpdateTaskRequest,
     TaskResponse,
@@ -8,6 +9,7 @@ from task_app.schemas.tasks import (
 )
 
 __all__ = [
+    "AvatarResponse",
     "CreateTaskRequest",
     "UpdateTaskRequest",
     "TaskResponse",

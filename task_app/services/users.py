@@ -6,5 +6,5 @@ class UserService:
     def __init__(self, repo: UserRepository):
         self.repo = repo
 
-    def get_all_users(self) -> List[User]:
-        return self.repo.get_all()
+    async def get_all_users(self) -> List[User]:
+        return await self.repo.get_all()
